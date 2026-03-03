@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
+    "lucide-react": "^0.576.0",
     "mysql2": "^3.18.2",
     "next": "16.1.6",
     "react": "19.2.3",

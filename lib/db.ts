@@ -4,9 +4,11 @@ const pool = mysql.createPool({
 
   host: "localhost",
 
+  port: 3308, // IMPORTANTE: el puerto que pusiste en docker
+
   user: "root",
 
-  password: "",
+  password: "root",
 
   database: "shift_management",
 

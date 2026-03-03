@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "exceljs": {
+      "source": "aidotnet/moyucode",
+      "sourceType": "github",
+      "computedHash": "6a93a55db59104af6342605007d20dd24a6034e1d153767571b005f051395b22"
+    },
+    "tailwind-design-system": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "c88178d861802fa836be54e377e82bb67899b6c378807679a1feecd21bf63cb8"
+    }
+  }
+}

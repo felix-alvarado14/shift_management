@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "exceljs": {
+      "source": "aidotnet/moyucode",
+      "sourceType": "github",
+      "computedHash": "6a93a55db59104af6342605007d20dd24a6034e1d153767571b005f051395b22"
+    },
+    "next-best-practices": {
+      "source": "vercel-labs/next-skills",
+      "sourceType": "github",
+      "computedHash": "c31ddd68ba5798a79a516c619b1e1fc4408cc4876ad600fefa4f5add4425719d"
+    }
+  }
+}
