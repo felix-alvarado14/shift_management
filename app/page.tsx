@@ -1,19 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle, AlertCircle, Upload, Calendar, Clock, Download, Eye } from "lucide-react";
+import { CheckCircle, AlertCircle, Upload, Calendar, Clock } from "lucide-react";
 
 export default function Home() {
 
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [messageType, setMessageType] = useState<"success" | "error" | null>(null);
-  const [parsedData, setParsedData] = useState<any>(null);
-  const [showJson, setShowJson] = useState(false);
+  const [importResult, setImportResult] = useState<any>(null);
 
   const handleUpload = async (
     e: React.FormEvent<HTMLFormElement>,
-    type: "planned" | "actual"
+    loadType: "P" | "R",
+    typeLabel: string
   ) => {
     e.preventDefault();
     setIsLoading(true);
@@ -21,9 +21,10 @@ export default function Home() {
 
     const formElement = e.currentTarget;
     const formData = new FormData(formElement);
+    formData.append("load_type", loadType);
 
     try {
-      const response = await fetch(`/api/test-read`, {
+      const response = await fetch(`/api/import-load`, {
         method: "POST",
         body: formData,
       });
@@ -33,20 +34,27 @@ export default function Home() {
       console.log("Response data:", data);
 
       if (data.success) {
-        setMessage(`Archivo cargado exitosamente - ${data.rowCount} filas procesadas`);
+        setMessage(
+          `✓ ${typeLabel} cargado exitosamente - ${data.total_employees_processed} empleados, ${data.total_registries_inserted} registros`
+        );
         setMessageType("success");
-        setParsedData(data);
-        setShowJson(false);
+        setImportResult({
+          loadId: data.load_id,
+          employeesProcessed: data.total_employees_processed,
+          registriesInserted: data.total_registries_inserted,
+          type: typeLabel,
+        });
         formElement.reset();
       } else {
         setMessage(`Error: ${data.message || "Error al subir archivo"}`);
         setMessageType("error");
-        setParsedData(null);
+        setImportResult(null);
       }
     } catch (error) {
       console.error("Fetch error:", error);
       setMessage("Error al conectar con el servidor");
       setMessageType("error");
+      setImportResult(null);
     } finally {
       setIsLoading(false);
     }
@@ -85,94 +93,33 @@ export default function Home() {
           </div>
         )}
 
-        {/* Parsed Data Display */}
-        {parsedData && messageType === "success" && (
+        {/* Import Result Display */}
+        {importResult && messageType === "success" && (
           <div className="mb-8 bg-white rounded-xl shadow-md border border-slate-200 p-8">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="p-3 bg-emerald-100 rounded-lg">
+                <CheckCircle className="w-6 h-6 text-emerald-600" />
+              </div>
               <div>
                 <h3 className="text-xl font-semibold text-slate-900">
-                  Datos Procesados
+                  Importación Completada
                 </h3>
                 <p className="text-sm text-slate-600 mt-1">
-                  Archivo: <span className="font-medium">{parsedData.fileName}</span> | 
-                  Hoja: <span className="font-medium">{parsedData.sheetName}</span> |
-                  Empleados: <span className="font-medium">{parsedData.employeeCount}</span>
+                  Load ID: <span className="font-medium">#{importResult.loadId}</span> | 
+                  Tipo: <span className="font-medium">{importResult.type}</span>
                 </p>
               </div>
-              <button
-                onClick={() => setShowJson(!showJson)}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
-              >
-                {showJson ? <Eye className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                {showJson ? "Ver Tabla" : "Ver JSON"}
-              </button>
             </div>
 
-            {showJson ? (
-              // JSON View
-              <div className="bg-slate-900 rounded-lg p-4 overflow-x-auto">
-                <pre className="text-slate-100 font-mono text-sm">
-                  {JSON.stringify(
-                    {
-                      fileName: parsedData.fileName,
-                      sheetName: parsedData.sheetName,
-                      employeeCount: parsedData.employeeCount,
-                      data: parsedData.data,
-                    },
-                    null,
-                    2
-                  )}
-                </pre>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <p className="text-sm text-slate-600 mb-1">Empleados Procesados</p>
+                <p className="text-2xl font-bold text-slate-900">{importResult.employeesProcessed}</p>
               </div>
-            ) : (
-              // Table View
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50">
-                      <th className="px-4 py-3 text-left font-semibold text-slate-900">
-                        ID
-                      </th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-900">
-                        Iniciales
-                      </th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-900">
-                        Nombre
-                      </th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-900">
-                        Días Registrados
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parsedData.data.map((employee: any, idx: number) => (
-                      <tr
-                        key={idx}
-                        className="border-b border-slate-100 hover:bg-slate-50 transition-colors"
-                      >
-                        <td className="px-4 py-3 text-slate-700 font-medium">
-                          {employee.employee_id}
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">
-                          {employee.employee_initials}
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">
-                          {employee.employee_name}
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">
-                          <span className="inline-block bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-semibold">
-                            {Object.keys(employee.days).length} días
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <p className="text-sm text-slate-600 mb-1">Registros Insertados</p>
+                <p className="text-2xl font-bold text-slate-900">{importResult.registriesInserted}</p>
               </div>
-            )}
-
-            <div className="mt-6 text-sm text-slate-600">
-              Total de empleados: <span className="font-semibold text-slate-900">{parsedData.employeeCount}</span>
             </div>
           </div>
         )}
@@ -181,7 +128,7 @@ export default function Home() {
         <div className="grid md:grid-cols-2 gap-8">
 
           {/* Planned Shifts Form */}
-          <form onSubmit={(e) => handleUpload(e, "planned")}
+          <form onSubmit={(e) => handleUpload(e, "P", "Horario Planificado")}
                 className="bg-white p-8 rounded-xl shadow-md hover:shadow-lg transition-shadow border border-slate-200">
 
             <div className="flex items-start gap-4 mb-6">
@@ -198,8 +145,55 @@ export default function Home() {
               </div>
             </div>
 
+            <div className="mb-4 grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Año
+                </label>
+                <input
+                  type="number"
+                  name="load_year"
+                  min="2020"
+                  max="2100"
+                  required
+                  disabled={isLoading}
+                  defaultValue={new Date().getFullYear()}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Mes
+                </label>
+                <select
+                  name="load_month"
+                  required
+                  disabled={isLoading}
+                  defaultValue={new Date().getMonth() + 1}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-slate-100"
+                >
+                  <option value="">Seleccionar...</option>
+                  <option value="1">Enero</option>
+                  <option value="2">Febrero</option>
+                  <option value="3">Marzo</option>
+                  <option value="4">Abril</option>
+                  <option value="5">Mayo</option>
+                  <option value="6">Junio</option>
+                  <option value="7">Julio</option>
+                  <option value="8">Agosto</option>
+                  <option value="9">Septiembre</option>
+                  <option value="10">Octubre</option>
+                  <option value="11">Noviembre</option>
+                  <option value="12">Diciembre</option>
+                </select>
+              </div>
+            </div>
+
             <div className="mb-6">
               <label className="block">
+                <span className="block text-sm font-medium text-slate-700 mb-2">
+                  Archivo Excel
+                </span>
                 <input
                   type="file"
                   name="file"
@@ -212,6 +206,7 @@ export default function Home() {
                     file:text-sm file:font-semibold
                     file:bg-blue-50 file:text-blue-600
                     hover:file:bg-blue-100
+                    disabled:file:bg-slate-100 disabled:file:text-slate-600
                     cursor-pointer"
                 />
               </label>
@@ -223,12 +218,12 @@ export default function Home() {
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               <Upload className="w-5 h-5" />
-              {isLoading ? "Subiendo..." : "Subir Archivo"}
+              {isLoading ? "Procesando..." : "Subir Archivo"}
             </button>
           </form>
 
           {/* Actual Shifts Form */}
-          <form onSubmit={(e) => handleUpload(e, "actual")}
+          <form onSubmit={(e) => handleUpload(e, "R", "Horario Real")}
                 className="bg-white p-8 rounded-xl shadow-md hover:shadow-lg transition-shadow border border-slate-200">
 
             <div className="flex items-start gap-4 mb-6">
@@ -245,8 +240,55 @@ export default function Home() {
               </div>
             </div>
 
+            <div className="mb-4 grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Año
+                </label>
+                <input
+                  type="number"
+                  name="load_year"
+                  min="2020"
+                  max="2100"
+                  required
+                  disabled={isLoading}
+                  defaultValue={new Date().getFullYear()}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:bg-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Mes
+                </label>
+                <select
+                  name="load_month"
+                  required
+                  disabled={isLoading}
+                  defaultValue={new Date().getMonth() + 1}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:bg-slate-100"
+                >
+                  <option value="">Seleccionar...</option>
+                  <option value="1">Enero</option>
+                  <option value="2">Febrero</option>
+                  <option value="3">Marzo</option>
+                  <option value="4">Abril</option>
+                  <option value="5">Mayo</option>
+                  <option value="6">Junio</option>
+                  <option value="7">Julio</option>
+                  <option value="8">Agosto</option>
+                  <option value="9">Septiembre</option>
+                  <option value="10">Octubre</option>
+                  <option value="11">Noviembre</option>
+                  <option value="12">Diciembre</option>
+                </select>
+              </div>
+            </div>
+
             <div className="mb-6">
               <label className="block">
+                <span className="block text-sm font-medium text-slate-700 mb-2">
+                  Archivo Excel
+                </span>
                 <input
                   type="file"
                   name="file"
@@ -259,6 +301,7 @@ export default function Home() {
                     file:text-sm file:font-semibold
                     file:bg-green-50 file:text-green-600
                     hover:file:bg-green-100
+                    disabled:file:bg-slate-100 disabled:file:text-slate-600
                     cursor-pointer"
                 />
               </label>
@@ -270,7 +313,7 @@ export default function Home() {
               className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-300 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               <Upload className="w-5 h-5" />
-              {isLoading ? "Subiendo..." : "Subir Archivo"}
+              {isLoading ? "Procesando..." : "Subir Archivo"}
             </button>
           </form>
 
