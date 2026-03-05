@@ -1,303 +1,31 @@
 import { NextResponse } from "next/server";
 import { Workbook } from "exceljs";
-import pool from "@/lib/db";
 import { RowValues } from "exceljs";
+import pool from "@/lib/db";
+import { loadStaticData } from "@/lib/import/loadStaticData";
+import { parseShiftCode } from "@/lib/import/parseShiftCode";
+import { resolveShiftVersion } from "@/lib/import/resolveShiftVersion";
+import { upsertEmployee } from "@/lib/import/employeeService";
+import { insertRegistry } from "@/lib/import/registryService";
 
-interface StaticData {
-  qualificationLevelMap: Map<string, number>;
-  qualificationIdMap: Map<number, string>;
-  positionQualificationMap: Map<string, number>;
-  positionCodes: Set<string>;
-  shiftTypeCodes: Set<string>;
-  shiftTypeVersionMap: Map<string, ShiftTypeVersion[]>;
-  specialCodeMap: Map<string, SpecialCode>;
-  sectorCodeMap: Map<string, string>;
+interface RowData {
+  employeeId: string;
+  employeeName: string;
+  employeeInitials: string;
+  days: Array<{ day: number; shiftCode: string }>;
 }
 
-interface ShiftTypeVersion {
-  versionStartDate: Date;
-  versionEndDate: Date | null;
-  versionHours: number;
-  versionCountsAsWork: boolean;
-  versionCountsAsOperational: boolean;
-}
-
-interface SpecialCode {
-  specialCode: string;
-  specialCodeCountsAsWork: boolean;
-}
-
-interface ParsedShiftCode {
+interface RegistryData {
+  employeeId: string;
+  registryDate: Date;
+  shiftCodeOriginal: string;
   shiftTypeCode: string | null;
   specialCode: string | null;
   positionCode: string | null;
   sectorCode: string | null;
-}
-
-/**
- * Load all static data into memory to avoid repeated queries
- */
-async function loadStaticData(connection: any): Promise<StaticData> {
-  const qualificationLevelMap = new Map<string, number>();
-  const qualificationIdMap = new Map<number, string>();
-  const positionQualificationMap = new Map<string, number>();
-  const positionCodes = new Set<string>();
-  const shiftTypeVersionMap = new Map<string, ShiftTypeVersion[]>();
-  const specialCodeMap = new Map<string, SpecialCode>();
-  const sectorCodeMap = new Map<string, string>();
-
-  // Load qualifications
-  const [qualifications] = await connection.query(
-    "SELECT qualification_id, qualification_level FROM qualifications"
-  );
-  (qualifications as any[]).forEach((qual) => {
-    qualificationLevelMap.set(qual.qualification_id, qual.qualification_level);
-    qualificationIdMap.set(qual.qualification_level, qual.qualification_id);
-  });
-
-  // Load positions with their qualification requirements
-  const [positions] = await connection.query(
-    "SELECT position_code, position_name FROM positions"
-  );
-  (positions as any[]).forEach((pos) => {
-    positionCodes.add(pos.position_code);
-    // Map position code to qualification level from database
-    // Position codes correspond to qualification IDs (R, P, E, S, etc.)
-    const qualLevel = qualificationLevelMap.get(pos.position_code);
-    if (qualLevel !== undefined) {
-      positionQualificationMap.set(pos.position_code, qualLevel);
-    }
-  });
-
-  // Load sectors
-  const [sectors] = await connection.query(
-    "SELECT sector_code, sector_name FROM sectors"
-  );
-  (sectors as any[]).forEach((sector) => {
-    sectorCodeMap.set(sector.sector_code, sector.sector_name);
-  });
-
-  // Load shift type versions and codes
-  const [versions] = await connection.query(
-    `SELECT 
-      shift_type_code, 
-      version_start_date, 
-      version_end_date,
-      version_hours, 
-      version_counts_as_work, 
-      version_counts_as_operational 
-    FROM shift_type_versions 
-    ORDER BY shift_type_code, version_start_date`
-  );
-  const shiftTypeCodes = new Set<string>();
-  (versions as any[]).forEach((version) => {
-    shiftTypeCodes.add(version.shift_type_code);
-    const key = version.shift_type_code;
-    if (!shiftTypeVersionMap.has(key)) {
-      shiftTypeVersionMap.set(key, []);
-    }
-    shiftTypeVersionMap.get(key)!.push({
-      versionStartDate: version.version_start_date,
-      versionEndDate: version.version_end_date,
-      versionHours: version.version_hours,
-      versionCountsAsWork: version.version_counts_as_work,
-      versionCountsAsOperational: version.version_counts_as_operational,
-    });
-  });
-
-  // Load special codes
-  const [specialCodes] = await connection.query(
-    "SELECT special_code, special_code_counts_as_work FROM special_codes"
-  );
-  (specialCodes as any[]).forEach((code) => {
-    specialCodeMap.set(code.special_code, {
-      specialCode: code.special_code,
-      specialCodeCountsAsWork: code.special_code_counts_as_work,
-    });
-  });
-
-  return {
-    qualificationLevelMap,
-    qualificationIdMap,
-    positionQualificationMap,
-    positionCodes,
-    shiftTypeCodes,
-    shiftTypeVersionMap,
-    specialCodeMap,
-    sectorCodeMap,
-  };
-}
-
-/**
- * Parse shift code into components
- * Intelligently matches shift type codes (can be multi-letter like "HO")
- * Then extracts position and sector from remainder
- * Examples: AP1, AS, HO, A
- */
-function parseShiftCode(
-  code: string,
-  specialCodeMap: Map<string, SpecialCode>,
-  shiftTypeCodes: Set<string>
-): ParsedShiftCode {
-  const trimmedCode = code.trim().toUpperCase();
-
-  // Check if it's a special code first
-  if (specialCodeMap.has(trimmedCode)) {
-    return {
-      shiftTypeCode: null,
-      specialCode: trimmedCode,
-      positionCode: null,
-      sectorCode: null,
-    };
-  }
-
-  let shiftTypeCode: string | null = null;
-  let positionCode: string | null = null;
-  let sectorCode: string | null = null;
-
-  // Try to match shift type by checking longest possible match first
-  // This handles multi-letter shift types like "HO"
-  for (let checkLen = Math.min(trimmedCode.length, 3); checkLen >= 1; checkLen--) {
-    const potentialShiftType = trimmedCode.substring(0, checkLen);
-    if (shiftTypeCodes.has(potentialShiftType)) {
-      shiftTypeCode = potentialShiftType;
-      const remainder = trimmedCode.substring(checkLen);
-
-      // From remainder, extract sector (trailing digits) and position (letter)
-      const sectorMatch = remainder.match(/(\d+)$/);
-      if (sectorMatch) {
-        sectorCode = sectorMatch[1];
-        const withoutSector = remainder.substring(
-          0,
-          remainder.length - sectorCode.length
-        );
-        if (withoutSector.length > 0) {
-          positionCode = withoutSector; // Everything before digits is position
-        }
-      } else {
-        // No trailing digits, entire remainder is position
-        if (remainder.length > 0) {
-          positionCode = remainder;
-        }
-      }
-      break;
-    }
-  }
-
-  return {
-    shiftTypeCode,
-    specialCode: null,
-    positionCode,
-    sectorCode,
-  };
-}
-
-/**
- * Normalize a date to just the date part (YYYY-MM-DD) for comparison
- */
-function normalizeDate(d: Date | string): Date {
-  const date = typeof d === 'string' ? new Date(d) : d;
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-/**
- * Resolve the correct shift version for a given date
- */
-function resolveShiftVersion(
-  shiftTypeCode: string,
-  registryDate: Date,
-  shiftTypeVersionMap: Map<string, ShiftTypeVersion[]>
-): ShiftTypeVersion | null {
-  const versions = shiftTypeVersionMap.get(shiftTypeCode);
-  if (!versions || versions.length === 0) {
-    return null;
-  }
-
-  // Normalize registry date for comparison
-  const normalizedRegistryDate = normalizeDate(registryDate);
-
-  // Find the version that covers this date
-  for (const version of versions) {
-    const startDate = normalizeDate(version.versionStartDate);
-    const endDate = version.versionEndDate ? normalizeDate(version.versionEndDate) : null;
-
-    if (
-      normalizedRegistryDate >= startDate &&
-      (!endDate || normalizedRegistryDate <= endDate)
-    ) {
-      return version;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Insert or update employee with qualification
- */
-async function upsertEmployee(
-  connection: any,
-  employeeId: string,
-  employeeName: string,
-  employeeInitials: string,
-  qualificationId: string | null
-): Promise<void> {
-  const query = `
-    INSERT INTO employees (employee_id, employee_name, employee_initials, qualification_id)
-    VALUES (?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      employee_name = VALUES(employee_name),
-      employee_initials = VALUES(employee_initials),
-      qualification_id = VALUES(qualification_id),
-      employee_updated_at = CURRENT_TIMESTAMP
-  `;
-
-  await connection.execute(query, [
-    employeeId,
-    employeeName,
-    employeeInitials,
-    qualificationId,
-  ]);
-}
-
-/**
- * Insert registry record
- */
-async function insertRegistry(
-  connection: any,
-  loadId: number,
-  employeeId: string,
-  registryDate: Date,
-  shiftCodeOriginal: string,
-  shiftTypeCode: string | null,
-  specialCode: string | null,
-  positionCode: string | null,
-  sectorCode: string | null,
-  registryHours: number,
-  registryCountsAsWork: boolean,
-  registryCountsAsOperational: boolean
-): Promise<void> {
-  const query = `
-    INSERT INTO registries (
-      load_id, employee_id, registry_date, shift_code_original,
-      shift_type_code, special_code, position_code, sector_code,
-      registry_hours, registry_counts_as_work, registry_counts_as_operational
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
-
-  await connection.execute(query, [
-    loadId,
-    employeeId,
-    registryDate,
-    shiftCodeOriginal,
-    shiftTypeCode,
-    specialCode,
-    positionCode,
-    sectorCode,
-    registryHours,
-    registryCountsAsWork,
-    registryCountsAsOperational,
-  ]);
+  registryHours: number;
+  registryCountsAsWork: boolean;
+  registryCountsAsOperational: boolean;
 }
 
 /**
@@ -475,86 +203,95 @@ export async function POST(request: Request) {
           // Build registry date
           const registryDate = new Date(loadYear, loadMonth - 1, dayData.day);
 
-          // Parse shift code
-          const parsed = parseShiftCode(
-            dayData.shiftCode,
-            staticData.specialCodeMap,
-            staticData.shiftTypeCodes
-          );
+          // Check if this is a compound shift (format: AX/CX)
+          // Compound shifts like AS/CP1 should be split and inserted as two separate registries
+          const shiftCodesToProcess = dayData.shiftCode.includes('/')
+            ? dayData.shiftCode.split('/')
+            : [dayData.shiftCode];
 
-          let registryHours = 0;
-          let registryCountsAsWork = false;
-          let registryCountsAsOperational = false;
-
-          // Handle special code
-          if (parsed.specialCode) {
-            const specialCode = staticData.specialCodeMap.get(
-              parsed.specialCode
-            );
-            if (specialCode) {
-              registryCountsAsWork = specialCode.specialCodeCountsAsWork;
-              registryCountsAsOperational = false;
-            }
-
-            registriesToInsert.push({
-              employeeId: rowData.employeeId,
-              registryDate,
-              shiftCodeOriginal: dayData.shiftCode,
-              shiftTypeCode: null,
-              specialCode: parsed.specialCode,
-              positionCode: null,
-              sectorCode: null,
-              registryHours,
-              registryCountsAsWork,
-              registryCountsAsOperational,
-            });
-          }
-          // Handle regular shift code
-          else if (parsed.shiftTypeCode) {
-            // Resolve shift version
-            const version = resolveShiftVersion(
-              parsed.shiftTypeCode,
-              registryDate,
-              staticData.shiftTypeVersionMap
+          // Process each individual shift
+          for (const shiftCode of shiftCodesToProcess) {
+            // Parse shift code
+            const parsed = parseShiftCode(
+              shiftCode,
+              staticData.specialCodeMap,
+              staticData.shiftTypeCodes
             );
 
-            if (version) {
-              registryHours = version.versionHours;
-              registryCountsAsWork = version.versionCountsAsWork;
-              registryCountsAsOperational =
-                version.versionCountsAsOperational;
-            }
+            let registryHours = 0;
+            let registryCountsAsWork = false;
+            let registryCountsAsOperational = false;
 
-            // Update highest qualification if position exists
-            if (parsed.positionCode) {
-              const qualLevel = staticData.positionQualificationMap.get(
-                parsed.positionCode
-              ) || 0;
-              if (qualLevel > employeeData.highestQualLevel) {
-                employeeData.highestQualLevel = qualLevel;
+            // Handle special code
+            if (parsed.specialCode) {
+              const specialCode = staticData.specialCodeMap.get(
+                parsed.specialCode
+              );
+              if (specialCode) {
+                registryCountsAsWork = specialCode.specialCodeCountsAsWork;
+                registryCountsAsOperational = false;
               }
+
+              registriesToInsert.push({
+                employeeId: rowData.employeeId,
+                registryDate,
+                shiftCodeOriginal: dayData.shiftCode,
+                shiftTypeCode: null,
+                specialCode: parsed.specialCode,
+                positionCode: null,
+                sectorCode: null,
+                registryHours,
+                registryCountsAsWork,
+                registryCountsAsOperational,
+              });
             }
+            // Handle regular shift code
+            else if (parsed.shiftTypeCode) {
+              // Resolve shift version
+              const version = resolveShiftVersion(
+                parsed.shiftTypeCode,
+                registryDate,
+                staticData.shiftTypeVersionMap
+              );
 
-            // Validate sector_code and position_code exist in database
-            const validatedSectorCode = parsed.sectorCode && staticData.sectorCodeMap.has(parsed.sectorCode)
-              ? parsed.sectorCode
-              : null;
-            const validatedPositionCode = parsed.positionCode && staticData.positionCodes.has(parsed.positionCode)
-              ? parsed.positionCode
-              : null;
+              if (version) {
+                registryHours = version.versionHours;
+                registryCountsAsWork = version.versionCountsAsWork;
+                registryCountsAsOperational =
+                  version.versionCountsAsOperational;
+              }
 
-            registriesToInsert.push({
-              employeeId: rowData.employeeId,
-              registryDate,
-              shiftCodeOriginal: dayData.shiftCode,
-              shiftTypeCode: parsed.shiftTypeCode,
-              specialCode: null,
-              positionCode: validatedPositionCode,
-              sectorCode: validatedSectorCode,
-              registryHours,
-              registryCountsAsWork,
-              registryCountsAsOperational,
-            });
+              // Update highest qualification if position exists
+              if (parsed.positionCode) {
+                const qualLevel = staticData.positionQualificationMap.get(
+                  parsed.positionCode
+                ) || 0;
+                if (qualLevel > employeeData.highestQualLevel) {
+                  employeeData.highestQualLevel = qualLevel;
+                }
+              }
+
+              // Validate sector_code and position_code exist in database
+              const validatedSectorCode = parsed.sectorCode && staticData.sectorCodeMap.has(parsed.sectorCode)
+                ? parsed.sectorCode
+                : null;
+              const validatedPositionCode = parsed.positionCode && staticData.positionCodes.has(parsed.positionCode)
+                ? parsed.positionCode
+                : null;
+
+              registriesToInsert.push({
+                employeeId: rowData.employeeId,
+                registryDate,
+                shiftCodeOriginal: dayData.shiftCode,
+                shiftTypeCode: parsed.shiftTypeCode,
+                specialCode: null,
+                positionCode: validatedPositionCode,
+                sectorCode: validatedSectorCode,
+                registryHours,
+                registryCountsAsWork,
+                registryCountsAsOperational,
+              });
+            }
           }
         }
       }

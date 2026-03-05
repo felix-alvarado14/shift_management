@@ -10,6 +10,11 @@
       "source": "wshobson/agents",
       "sourceType": "github",
       "computedHash": "c88178d861802fa836be54e377e82bb67899b6c378807679a1feecd21bf63cb8"
+    },
+    "tanstack-table": {
+      "source": "casper-studios/casper-marketplace",
+      "sourceType": "github",
+      "computedHash": "ce9ccac64fd2268293f41fc9e3cc0a13f5a99850381b7929c6e5b22843c4ed52"
     }
   }
 }
