@@ -1,5 +1,5 @@
 import pool from '@/lib/db';
-import StaffingMatrixTable from '@/components/dashboard/StaffingMatrixTable';
+import DashboardContent from '@/components/dashboard/DashboardContent';
 
 interface LoadInfo {
   load_id: number;
@@ -106,29 +106,11 @@ export default async function DashboardPage({
         </div>
 
         {/* Tables Section */}
-        <div className="space-y-8">
-          {/* Operational Shifts Table */}
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <StaffingMatrixTable
-              loadId={loadInfo.load_id}
-              year={loadInfo.load_year}
-              month={loadInfo.load_month}
-              title="Operational Shifts Staffing Matrix"
-              endpoint="operational-staffing-matrix"
-            />
-          </div>
-
-          {/* Non-Operational Shifts Table */}
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <StaffingMatrixTable
-              loadId={loadInfo.load_id}
-              year={loadInfo.load_year}
-              month={loadInfo.load_month}
-              title="Non-Operational Shifts Staffing Matrix (e.g., Holiday, Leave)"
-              endpoint="non-operational-staffing-matrix"
-            />
-          </div>
-        </div>
+        <DashboardContent
+          loadId={loadInfo.load_id}
+          year={loadInfo.load_year}
+          month={loadInfo.load_month}
+        />
       </div>
     </div>
   );

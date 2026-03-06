@@ -19,6 +19,8 @@ interface StaffingMatrixTableProps {
   month: number;
   title: string;
   endpoint: string;
+  showPositionFilters?: boolean;
+  isOperational?: boolean;
 }
 
 interface TableRow {
@@ -32,15 +34,47 @@ export default function StaffingMatrixTable({
   month,
   title,
   endpoint,
+  showPositionFilters = false,
+  isOperational = true,
 }: StaffingMatrixTableProps) {
   const [data, setData] = useState<ShiftStaffingMatrixData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedPositions, setSelectedPositions] = useState<Set<string>>(
+    new Set(['S', 'E', 'P', 'R'])
+  );
+
+  // Helper function to extract position from shift code
+  const extractPosition = (shiftCode: string): string => {
+    if (shiftCode.length >= 2) {
+      return shiftCode[1]; // Position is second character
+    }
+    return '';
+  };
+
+  // Helper function to toggle position filter
+  const togglePosition = (position: string) => {
+    const newPositions = new Set(selectedPositions);
+    if (newPositions.has(position)) {
+      newPositions.delete(position);
+    } else {
+      newPositions.add(position);
+    }
+    setSelectedPositions(newPositions);
+  };
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const response = await fetch(`/api/dashboard/${loadId}/${endpoint}`);
+        let url = `/api/dashboard/${loadId}/${endpoint}`;
+        
+        // Add position filter parameters if applicable
+        if (showPositionFilters && selectedPositions.size > 0) {
+          const positions = Array.from(selectedPositions).join(',');
+          url += `?positions=${positions}`;
+        }
+        
+        const response = await fetch(url);
         const json = await response.json();
 
         if (!json.success) {
@@ -57,21 +91,37 @@ export default function StaffingMatrixTable({
     };
 
     fetchData();
-  }, [loadId, endpoint]);
+  }, [loadId, endpoint, showPositionFilters, selectedPositions]);
 
   // Determine number of days in the month
   const daysInMonth = new Date(year, month, 0).getDate();
 
   // Build table data
   const tableData = useMemo<TableRow[]>(() => {
-    return data.map((row) => {
+    let filteredData = data;
+    
+    // Only apply client-side position filtering if showPositionFilters is enabled
+    // Note: For operational matrix, server-side filtering is primary, this is a safeguard
+    if (showPositionFilters) {
+      filteredData = data.filter((row) => {
+        // AC shifts are already filtered server-side, keep them
+        if (row.shift_code === 'AC') {
+          return true;
+        }
+        // For other shifts, check position
+        const position = extractPosition(row.shift_code);
+        return selectedPositions.has(position);
+      });
+    }
+    
+    return filteredData.map((row) => {
       const tableRow: TableRow = { shift_code: row.shift_code };
       for (let day = 1; day <= daysInMonth; day++) {
         tableRow[`day_${day}`] = row.days[String(day)] || 0;
       }
       return tableRow;
     });
-  }, [data, daysInMonth]);
+  }, [data, daysInMonth, selectedPositions, showPositionFilters]);
 
   // Build columns dynamically
   const columns = useMemo<ColumnDef<TableRow>[]>(() => {
@@ -94,8 +144,20 @@ export default function StaffingMatrixTable({
         header: String(day),
         cell: (info) => {
           const value = Number(info.getValue());
+          const row = info.row.original;
+          const isACRow = row.shift_code === 'AC';
+          const isDShift = row.shift_code.startsWith('D');
+          const isACWithStaff = isOperational && isACRow && value > 0;
+          const shouldHighlightZero = isOperational && !isDShift && !isACRow && value === 0;
+          
           return (
-            <div className="text-center text-gray-700">
+            <div className={`text-center font-medium ${
+              isACWithStaff
+                ? 'bg-red-300 text-red-900 px-2 py-1 rounded'
+                : shouldHighlightZero
+                ? 'bg-red-300 text-red-900 px-2 py-1 rounded'
+                : 'text-gray-700'
+            }`}>
               {value > 0 ? value : '-'}
             </div>
           );
@@ -131,7 +193,31 @@ export default function StaffingMatrixTable({
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold text-gray-900">{title}</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold text-gray-900">{title}</h2>
+        {showPositionFilters && (
+          <div className="flex gap-2">
+            {[
+              { position: 'S', label: 'Supervisors' },
+              { position: 'E', label: 'Executives' },
+              { position: 'P', label: 'Planners' },
+              { position: 'R', label: 'Radios' },
+            ].map(({ position, label }) => (
+              <button
+                key={position}
+                onClick={() => togglePosition(position)}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  selectedPositions.has(position)
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       
       {tableData.length === 0 ? (
         <div className="rounded-md bg-gray-50 p-6 text-center text-gray-600">
@@ -161,27 +247,32 @@ export default function StaffingMatrixTable({
               ))}
             </thead>
             <tbody>
-              {table.getRowModel().rows.map((row, idx) => (
-                <tr
-                  key={row.id}
-                  className={`border-b border-gray-200 ${
-                    idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
-                  } hover:bg-blue-50 transition-colors`}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <td
-                      key={cell.id}
-                      className="px-4 py-3 text-sm"
-                      style={{ width: cell.column.getSize() }}
-                    >
-                      {flexRender(
-                        cell.column.columnDef.cell,
+              {table.getRowModel().rows.map((row, idx) => {
+                const isACRow = isOperational && row.original.shift_code === 'AC';
+                return (
+                  <tr
+                    key={row.id}
+                    className={`border-b border-gray-200 transition-colors ${
+                      isACRow 
+                        ? 'bg-amber-50 hover:bg-amber-100 font-semibold' 
+                        : `${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50`
+                    }`}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <td
+                        key={cell.id}
+                        className={`px-4 py-3 text-sm ${isACRow ? 'text-amber-900' : ''}`}
+                        style={{ width: cell.column.getSize() }}
+                      >
+                        {flexRender(
+                          cell.column.columnDef.cell,
                         cell.getContext()
                       )}
                     </td>
                   ))}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
